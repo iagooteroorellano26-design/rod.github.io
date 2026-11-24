@@ -182,8 +182,8 @@ body.theater .scene.is-vid{aspect-ratio:16/10;max-width:740px}
   <h3>Canciones</h3>
   <div id="eTr"></div>
   <div class="row"><input type="text" id="tName" placeholder="Título"><input type="text" id="tUrl" placeholder="Link directo a audio o video (…mp3 / …mp4)"><button id="addT" type="button">Agregar</button></div>
-  <div class="row"><label class="btn">📁 Importar audio o video<input type="file" id="tFile" accept="audio/*,video/*" multiple hidden></label><button id="exportHtml" type="button">💾 Exportar reproductor autónomo (.html)</button></div>
-  <p class="note">Los archivos que importás se copian dentro del navegador (IndexedDB) y también podés usar «Exportar reproductor autónomo» para bajar un .html con todas las canciones incrustadas adentro.</p>
+  <div class="row"><label class="btn">📁 Importar audio o video<input type="file" id="tFile" accept="audio/*,video/*" multiple hidden></label><label class="btn">📥 Importar desde HTML autónomo<input type="file" id="impHtml" accept=".html,text/html" hidden></label><button id="exportHtml" type="button">💾 Exportar reproductor autónomo (.html)</button></div>
+  <p class="note">Podés importar canciones desde un .html autónomo (o incluso abrirlo directo) y se copian al almacenamiento de esta página en GitHub (IndexedDB) para usarlas acá sin depender del archivo.</p>
  </div>
 </div>
 <div id="drop">Soltá tus canciones o videos acá</div>
@@ -229,6 +229,21 @@ function openDB(){
  });
  return dbProm;
 }
+function saveBuffer(id,buf,type,name){
+ var rec={buf:buf,type:type||"audio/mpeg",name:name||"pista"};
+ memSetBlob(id,rec);
+ return openDB().then(function(d){
+  return new Promise(function(ok){
+   try{
+    var tx=d.transaction(STORE,"readwrite");
+    tx.objectStore(STORE).put(rec,id);
+    tx.oncomplete=function(){ok(rec)};
+    tx.onerror=function(){ok(rec)};
+    tx.onabort=function(){ok(rec)};
+   }catch(e){ok(rec)}
+  });
+ }).catch(function(){return rec});
+}
 function saveTrackBytes(id,file){
  return Promise.resolve().then(function(){
   if(typeof file.arrayBuffer==="function")return file.arrayBuffer();
@@ -239,19 +254,7 @@ function saveTrackBytes(id,file){
    r.readAsArrayBuffer(file);
   });
  }).then(function(buf){
-  var rec={buf:buf,type:file.type||"audio/mpeg",name:file.name||"pista"};
-  memSetBlob(id,rec);
-  return openDB().then(function(d){
-   return new Promise(function(ok){
-    try{
-     var tx=d.transaction(STORE,"readwrite");
-     tx.objectStore(STORE).put(rec,id);
-     tx.oncomplete=function(){ok(rec)};
-     tx.onerror=function(){ok(rec)};
-     tx.onabort=function(){ok(rec)};
-    }catch(e){ok(rec)}
-   });
-  }).catch(function(){return rec});
+  return saveBuffer(id,buf,file.type||"audio/mpeg",file.name||"pista");
  }).catch(function(){return null});
 }
 function getTrackBlob(id){
@@ -288,20 +291,105 @@ function delBlob(id){
  }).catch(function(){});
 }
 
+function hydrateTrack(t){
+ if(!t)return;
+ if(t.dataUrl&&!t.url){t.url=t.dataUrl;t.embedded=true}
+ if(t.blobId&&!t.url){
+  t.local=true;
+  getTrackBlob(t.blobId).then(function(b){
+   if(b){t.file=b;t.url=URL.createObjectURL(b);t.missing=false;render();renderEd()}
+   else{t.missing=true;render();renderEd()}
+  });
+ }
+}
 function hydrate(list){
  if(!Array.isArray(list))return;
  list.forEach(function(a){
   if(!Array.isArray(a.tracks))a.tracks=[];
-  a.tracks.forEach(function(t){
-   if(t.dataUrl&&!t.url){t.url=t.dataUrl;t.embedded=true}
-   if(t.blobId){
-    t.local=true;
-    getTrackBlob(t.blobId).then(function(b){
-     if(b){t.file=b;t.url=URL.createObjectURL(b);t.missing=false;render();renderEd()}
-     else{t.missing=true;render();renderEd()}
-    });
+  a.tracks.forEach(hydrateTrack);
+ });
+}
+
+function dataUrlToBlob(du){
+ var m=/^data:([^;,]+)?(;base64)?,(.*)$/i.exec(du||"");
+ if(!m)return null;
+ var mime=m[1]||"audio/mpeg";
+ var isB64=!!m[2];
+ var body=m[3]||"";
+ var bytes;
+ if(isB64){
+  var bin=atob(body);
+  bytes=new Uint8Array(bin.length);
+  for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+ }else{
+  var dec=decodeURIComponent(body);
+  bytes=new Uint8Array(dec.length);
+  for(var j=0;j<dec.length;j++)bytes[j]=dec.charCodeAt(j);
+ }
+ return new Blob([bytes],{type:mime});
+}
+
+function ingestList(list,mode){
+ if(!Array.isArray(list)||!list.length)return Promise.resolve(0);
+ var count=0;
+ return Promise.all(list.map(function(srcAlb){
+  var tracks=Array.isArray(srcAlb.tracks)?srcAlb.tracks:[];
+  return Promise.all(tracks.map(function(srcTr){
+   var rawUrl=srcTr.dataUrl||srcTr.url||"";
+   var isData=/^data:/i.test(rawUrl);
+   if(isData){
+    var b=dataUrlToBlob(rawUrl);
+    if(b){
+     var id=uid();
+     return b.arrayBuffer().then(function(buf){
+      return saveBuffer(id,buf,b.type||"audio/mpeg",srcTr.title||"pista");
+     }).then(function(rec){
+      var blob=rec?new Blob([rec.buf],{type:rec.type}):b;
+      count++;
+      return{
+       title:srcTr.title||"Pista",
+       url:URL.createObjectURL(blob),
+       file:blob,
+       blobId:rec?id:null,
+       local:true,
+       video:!!srcTr.video||/^data:video\//i.test(rawUrl)
+      };
+     });
+    }
    }
+   count++;
+   return Promise.resolve({
+    title:srcTr.title||"Pista",
+    url:rawUrl,
+    video:!!srcTr.video
+   });
+  })).then(function(cleanTracks){
+   return{
+    name:srcAlb.name||"Álbum importado",
+    artist:srcAlb.artist||"Artista",
+    cover:srcAlb.cover||"",
+    tracks:cleanTracks
+   };
   });
+ })).then(function(built){
+  if(mode==="replace"){
+   S=built;
+   ai=0;ti=-1;
+  }else{
+   built.forEach(function(alb){
+    var existing=S.find(function(x){return x.name===alb.name});
+    if(existing){
+     if(!existing.cover&&alb.cover)existing.cover=alb.cover;
+     if(!existing.artist&&alb.artist)existing.artist=alb.artist;
+     alb.tracks.forEach(function(tr){existing.tracks.push(tr)});
+    }else{
+     S.push(alb);
+    }
+   });
+  }
+  save();
+  renderAll();
+  return count;
  });
 }
 
@@ -312,10 +400,18 @@ function load(){
  try{raw=localStorage.getItem(KEY)}catch(e){raw=null}
  if(!raw&&memGetLocal())raw=memGetLocal();
  if(raw){try{S=JSON.parse(raw)}catch(e){S=null}}
- if((!S||!S.length)&&emb&&emb.length)S=emb;
+ if((!S||!S.length)&&emb&&emb.length){
+  S=[blank("Mi primer álbum")];
+  hydrate(S);
+  ingestList(emb,"append").then(function(n){
+   if(n>0)toast("Se importaron "+n+(n>1?" pistas desde el HTML autónomo":" pista desde el HTML autónomo"));
+  });
+  return;
+ }
  if(!S||!S.length)S=[blank("Mi primer álbum")];
  hydrate(S);
 }
+
 function save(){
  var payload=JSON.stringify(S.map(function(a){
   return{name:a.name,artist:a.artist,cover:a.cover,tracks:a.tracks.map(function(t){
@@ -663,6 +759,31 @@ function addFiles(fl){
 }
 $("#tFile").onchange=function(){addFiles(this.files);this.value=""};
 
+function importStandaloneHtmlFile(file){
+ if(!file)return;
+ toast("Leyendo HTML autónomo...");
+ var p=typeof file.text==="function"?file.text():new Promise(function(ok,no){
+  var r=new FileReader();r.onload=function(){ok(r.result)};r.onerror=no;r.readAsText(file);
+ });
+ p.then(function(txt){
+  var doc=new DOMParser().parseFromString(txt,"text/html");
+  var el=doc.querySelector("#embedded-data");
+  if(!el||!el.textContent.trim()||el.textContent.trim()==="null"){
+   return toast("Ese HTML no tiene canciones autónomas incrustadas");
+  }
+  var parsed=JSON.parse(el.textContent);
+  if(!Array.isArray(parsed)||!parsed.length){
+   return toast("No se encontraron álbumes en ese HTML");
+  }
+  return ingestList(parsed,"append").then(function(n){
+   toast("¡Listo! Se importaron "+n+(n>1?" pistas a la página":" pista a la página"));
+  });
+ }).catch(function(){
+  toast("No se pudo leer ese archivo HTML");
+ });
+}
+$("#impHtml").onchange=function(){importStandaloneHtmlFile(this.files&&this.files[0]);this.value=""};
+
 function blobToDataUrl(b){
  return new Promise(function(ok,no){var r=new FileReader();r.onload=function(){ok(r.result)};r.onerror=no;r.readAsDataURL(b)});
 }
@@ -696,7 +817,11 @@ var dc=0;function hasF(e){return e.dataTransfer&&Array.prototype.indexOf.call(e.
 window.addEventListener("dragenter",function(e){if(!hasF(e))return;e.preventDefault();dc++;$("#drop").classList.add("on")});
 window.addEventListener("dragover",function(e){if(hasF(e))e.preventDefault()});
 window.addEventListener("dragleave",function(e){if(!hasF(e))return;dc--;if(dc<=0){dc=0;$("#drop").classList.remove("on")}});
-window.addEventListener("drop",function(e){if(!hasF(e))return;e.preventDefault();dc=0;$("#drop").classList.remove("on");addFiles(e.dataTransfer.files)});
+window.addEventListener("drop",function(e){if(!hasF(e))return;e.preventDefault();dc=0;$("#drop").classList.remove("on");
+ var fl=e.dataTransfer.files;
+ if(fl&&fl.length===1&&/\.html?$/i.test(fl[0].name)){importStandaloneHtmlFile(fl[0]);return;}
+ addFiles(fl);
+});
 load();syncFx();renderAll();
 })();
 </script></body></html>
