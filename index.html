@@ -16,10 +16,10 @@
 :root[data-skin="emerald"]{--bg:#0b1410;--panel:#12211a;--tx:#e4f5ec;--mut:#7aa690;--ac:#10b981;--ln:#1e382c}
 :root[data-skin="synth"]{--bg:#120d1d;--panel:#1c142c;--tx:#f3e8ff;--mut:#9c82b8;--ac:#d946ef;--ln:#32234d}
 :root[data-skin="cobalt"]{--bg:#0c1322;--panel:#131d33;--tx:#e2ecff;--mut:#7c93bd;--ac:#38bdf8;--ln:#223354}
-html{scroll-padding-top:env(safe-area-inset-top,0px);-webkit-text-size-adjust:100%}
+html{scroll-padding-top:env(safe-area-inset-top,0px);-webkit-text-size-adjust:100%;overflow-x:clip}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;transition:background .25s,color .25s;overflow-x:hidden}
-.wrap{max-width:980px;margin:0 auto;padding:16px 14px calc(56px + env(safe-area-inset-bottom,0px));transition:max-width .35s ease}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;transition:background .25s,color .25s;overflow-x:clip;width:100%;position:relative}
+.wrap{max-width:980px;margin:0 auto;padding:16px 14px calc(56px + env(safe-area-inset-bottom,0px));transition:max-width .35s ease;overflow-x:clip}
 body.theater{background:#050505}
 body.theater .wrap{max-width:1180px}
 body.theater .top .tabs,body.theater .top #fxBtn,body.theater .top #edBtn{opacity:.25;transition:opacity .25s}
@@ -39,9 +39,9 @@ button.on{background:var(--ac);border-color:var(--ac);color:var(--bg)}
 select{padding:6px 12px;font-size:13px}
 .main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start}
 body.theater .main{grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr)}
-@media(max-width:720px){.main,body.theater .main{grid-template-columns:1fr;gap:20px}}
-.stage{display:flex;flex-direction:column;align-items:center;gap:12px}
-.disc{width:100%;max-width:420px;aspect-ratio:1;border-radius:4%;background:#444 center/cover;position:relative;cursor:pointer;box-shadow:0 14px 40px rgba(0,0,0,.35);transition:border-radius .6s ease,box-shadow .6s;touch-action:none;user-select:none;-webkit-user-select:none}
+@media(max-width:720px){.main,body.theater .main{grid-template-columns:minmax(0,1fr);gap:20px}}
+.stage{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;min-width:0}
+.disc{width:100%;max-width:420px;aspect-ratio:1;border-radius:4%;background:#444 center/cover;position:relative;cursor:pointer;box-shadow:0 14px 40px rgba(0,0,0,.35);transition:border-radius .6s ease,box-shadow .6s;touch-action:none;user-select:none;-webkit-user-select:none;will-change:transform;transform-origin:50% 50%;contain:paint}
 .disc.vinyl{border-radius:50%;box-shadow:0 10px 36px rgba(0,0,0,.5)}
 .disc::before{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;transition:opacity .6s;background:repeating-radial-gradient(circle,rgba(0,0,0,.28) 0 1px,transparent 1px 4px),conic-gradient(from 20deg,transparent 0 20%,rgba(255,255,255,.22) 25%,transparent 30% 70%,rgba(255,255,255,.18) 75%,transparent 80%)}
 .disc.vinyl::before{opacity:1}
@@ -88,7 +88,8 @@ input[type=text]{flex:1;min-width:140px;font:16px/1.3 inherit;color:var(--tx);ba
 .trk span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trk button{padding:3px 10px;min-height:32px}
 .note{font-size:12px;color:var(--mut);margin:8px 0 0}
-.scene{width:100%;max-width:420px;aspect-ratio:1;perspective:1400px;transition:max-width .35s ease,aspect-ratio .35s ease}
+.scene{width:100%;max-width:420px;aspect-ratio:1;perspective:1400px;transition:max-width .35s ease,aspect-ratio .35s ease;position:relative;overflow:hidden;border-radius:4%;contain:layout style}
+.scene.is-vinyl{border-radius:50%;overflow:visible}
 body.theater .scene.is-vid{aspect-ratio:16/10;max-width:740px}
 .flip{position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform .9s cubic-bezier(.4,.1,.2,1)}
 .flip.vid{transform:rotateY(180deg)}
@@ -631,7 +632,7 @@ function render(){
  $("#pp").textContent=au.paused?"▶":"❚❚";
  var ct=A().tracks[ti],cv=ct&&isVid(ct);
  if(!cv&&theater)setTheater(false);
- $("#scene").className="scene"+(cv&&showVid?" is-vid":"");
+ $("#scene").className="scene"+(cv&&showVid?" is-vid":"")+(!cv&&vinyl?" is-vinyl":"");
  $("#vidBtns").className="vid-btns"+(cv?" show":"");
  $("#flip").textContent=cv?(showVid?"Ver disco":"Ver video"):(vinyl?"Ver portada":"Ver como vinilo");$("#flip3d").className="flip"+(cv&&showVid?" vid":"");
  $("#disc").className="disc"+(vinyl?" vinyl":"");
@@ -703,7 +704,8 @@ D.onclick=function(){if(!vinyl){vinyl=true;render();if(A().tracks.length&&au.pau
 (function loop(now){
  if(drag&&drag.sc&&performance.now()-drag.t>90)sc.target=0;
  var t=(drag&&drag.sc)?sc.pos/sc.sr:(au.currentTime||0);
- D.style.transform=vinyl?"rotate("+(t*RPS)+"deg)":"";
+ var deg=vinyl?((t*RPS)%360):0;
+ D.style.transform=vinyl?"translate3d(0,0,0) rotate("+deg+"deg)":"";
  var du=au.duration;if(!drag&&du)$("#seek").value=t/du*1000;
  $("#tc").textContent=fmt(t);$("#td").textContent=fmt(du);
  var playing=!au.paused||(drag&&drag.sc&&Math.abs(sc.rate)>0.05);
